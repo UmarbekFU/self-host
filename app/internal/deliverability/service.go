@@ -1,9 +1,11 @@
 package deliverability
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"newsletter/internal/store"
 	"github.com/sirupsen/logrus"
@@ -171,20 +173,83 @@ func (s *Service) checkDMARC(domain, expectedDMARC string) (CheckResult, error) 
 }
 
 func (s *Service) checkPTR(expectedPTR string) (CheckResult, error) {
-	// This is a simplified PTR check
-	// In a real implementation, you'd need to get the server's IP address
-	// and check if the reverse DNS lookup matches the expected PTR record
-	
-	// For now, we'll just return a placeholder
-	return CheckResult{Status: "warning", Message: "PTR check not implemented"}, nil
+	// Get server's public IP
+	serverIP, err := s.getServerIP()
+	if err != nil {
+		return CheckResult{Status: "fail", Message: "Failed to get server IP"}, err
+	}
+
+	// Perform reverse DNS lookup
+	names, err := net.LookupAddr(serverIP)
+	if err != nil {
+		return CheckResult{Status: "fail", Message: "Failed to perform reverse DNS lookup"}, err
+	}
+
+	if len(names) == 0 {
+		return CheckResult{Status: "fail", Message: "No PTR record found"}, nil
+	}
+
+	// Check if any of the returned names match the expected PTR record
+	for _, name := range names {
+		// Remove trailing dot
+		name = strings.TrimSuffix(name, ".")
+		if name == expectedPTR {
+			return CheckResult{Status: "pass", Message: "PTR record is valid"}, nil
+		}
+	}
+
+	return CheckResult{
+		Status:  "warning",
+		Message: "PTR record doesn't match expected value",
+		Details: fmt.Sprintf("Expected: %s\nFound: %s", expectedPTR, names[0]),
+	}, nil
+}
+
+func (s *Service) getServerIP() (string, error) {
+	// Try to get external IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String(), nil
 }
 
 func (s *Service) checkTLS(domain string) CheckResult {
-	// This is a simplified TLS check
-	// In a real implementation, you'd check if the domain has a valid TLS certificate
+	// Check if domain has a valid TLS certificate
+	conn, err := tls.Dial("tcp", domain+":443", &tls.Config{
+		InsecureSkipVerify: false,
+	})
+	if err != nil {
+		return CheckResult{Status: "fail", Message: "TLS connection failed", Details: err.Error()}
+	}
+	defer conn.Close()
+
+	// Check certificate validity
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return CheckResult{Status: "fail", Message: "No TLS certificate found"}
+	}
+
+	cert := state.PeerCertificates[0]
+	now := time.Now()
 	
-	// For now, we'll just return a placeholder
-	return CheckResult{Status: "warning", Message: "TLS check not implemented"}
+	if now.Before(cert.NotBefore) {
+		return CheckResult{Status: "fail", Message: "TLS certificate not yet valid"}
+	}
+	
+	if now.After(cert.NotAfter) {
+		return CheckResult{Status: "fail", Message: "TLS certificate expired"}
+	}
+
+	// Check if certificate matches domain
+	if err := cert.VerifyHostname(domain); err != nil {
+		return CheckResult{Status: "warning", Message: "TLS certificate doesn't match domain", Details: err.Error()}
+	}
+
+	return CheckResult{Status: "pass", Message: "TLS certificate is valid"}
 }
 
 func (s *Service) determineOverallStatus(checks map[string]bool) string {

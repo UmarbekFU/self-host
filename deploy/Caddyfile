@@ -1,57 +1,89 @@
 # Newsletter Platform Caddyfile
-# Replace with your actual domains
+# This configuration provides TLS termination and reverse proxy
 
-# Admin panel
-{$ADMIN_DOMAIN:panel.example.com} {
-    reverse_proxy app:8080
+# Admin Panel
+{$APP_DOMAIN} {
+    # Reverse proxy to application
+    reverse_proxy app:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
     
     # Security headers
     header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options DENY
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        
+        # Prevent MIME type sniffing
+        X-Content-Type-Options "nosniff"
+        
+        # XSS protection
         X-XSS-Protection "1; mode=block"
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        
+        # Content Security Policy
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none';"
     }
     
-    # CORS for API
-    @api {
-        path /api/*
-    }
-    header @api Access-Control-Allow-Origin "*"
-    header @api Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-    header @api Access-Control-Allow-Headers "Content-Type, Authorization"
+    # Compression
+    encode gzip
     
-    # Handle preflight requests
-    @options {
-        method OPTIONS
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format single_field common_log
     }
-    respond @options 200
 }
 
-# Sending domain (for tracking links)
-{$SENDING_DOMAIN:news.example.com} {
-    reverse_proxy app:8080
-    
-    # Handle tracking routes
-    handle /r/* {
-        reverse_proxy app:8080
+# Health check endpoint
+{$APP_DOMAIN}/health {
+    respond "OK" 200
+}
+
+# API endpoints
+{$APP_DOMAIN}/api/* {
+    reverse_proxy app:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
     }
-    
-    handle /u/* {
-        reverse_proxy app:8080
+}
+
+# Tracking endpoints (for email tracking)
+{$APP_DOMAIN}/r/* {
+    reverse_proxy app:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
     }
-    
-    # Handle tracking pixels
-    handle /api/track/* {
-        reverse_proxy app:8080
+}
+
+# Unsubscribe endpoints
+{$APP_DOMAIN}/u/* {
+    reverse_proxy app:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
     }
 }
 
 # Redirect HTTP to HTTPS
-http://{$ADMIN_DOMAIN:panel.example.com} {
-    redir https://{$ADMIN_DOMAIN:panel.example.com}{uri} permanent
+http://{$APP_DOMAIN} {
+    redir https://{$APP_DOMAIN}{uri} permanent
 }
 
-http://{$SENDING_DOMAIN:news.example.com} {
-    redir https://{$SENDING_DOMAIN:news.example.com}{uri} permanent
+# Optional: Sending domain (if different from app domain)
+{$SENDING_DOMAIN} {
+    # Redirect to admin panel
+    redir https://{$APP_DOMAIN} permanent
 }

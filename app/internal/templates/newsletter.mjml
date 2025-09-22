@@ -1,0 +1,128 @@
+<mjml>
+  <mj-head>
+    <mj-title>{{subject}}</mj-title>
+    <mj-preview>{{preview_text}}</mj-preview>
+    <mj-attributes>
+      <mj-all font-family="'Helvetica Neue', Arial, sans-serif"></mj-all>
+      <mj-text font-size="16px" color="#555555" line-height="1.6"></mj-text>
+      <mj-section background-color="#ffffff"></mj-section>
+    </mj-attributes>
+    <mj-style inline="inline">
+      .header-link {
+        color: #ffffff !important;
+        text-decoration: none;
+      }
+      .button-link {
+        color: #ffffff !important;
+        text-decoration: none;
+      }
+      .article-title {
+        color: #2c3e50 !important;
+        text-decoration: none;
+      }
+    </mj-style>
+  </mj-head>
+  <mj-body background-color="#f4f4f4">
+    <!-- Header -->
+    <mj-section background-color="#2c3e50" padding="20px 0">
+      <mj-column>
+        <mj-text align="center" color="#ffffff" font-size="24px" font-weight="bold">
+          {{company_name}}
+        </mj-text>
+        <mj-text align="center" color="#ecf0f1" font-size="14px">
+          {{newsletter_date}}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <!-- Main Content -->
+    <mj-section background-color="#ffffff" padding="40px 20px">
+      <mj-column>
+        <mj-text font-size="28px" font-weight="bold" color="#2c3e50" align="center">
+          {{subject}}
+        </mj-text>
+        
+        <mj-text font-size="18px" color="#7f8c8d" align="center" padding="20px 0">
+          {{preview_text}}
+        </mj-text>
+
+        <!-- Featured Article -->
+        <mj-section background-color="#f8f9fa" padding="20px" border-radius="5px">
+          <mj-column>
+            <mj-text font-size="20px" font-weight="bold" color="#2c3e50">
+              {{featured_article_title}}
+            </mj-text>
+            <mj-text font-size="16px" color="#555555" line-height="1.8">
+              {{featured_article_excerpt}}
+            </mj-text>
+            <mj-button background-color="#3498db" color="#ffffff" font-size="14px" 
+                       href="{{featured_article_url}}" padding="15px 0" border-radius="3px">
+              Read More
+            </mj-button>
+          </mj-column>
+        </mj-section>
+
+        <!-- Article Grid -->
+        <mj-section padding="30px 0">
+          <mj-column width="50%">
+            <mj-text font-size="18px" font-weight="bold" color="#2c3e50">
+              {{article_1_title}}
+            </mj-text>
+            <mj-text font-size="14px" color="#555555" line-height="1.6">
+              {{article_1_excerpt}}
+            </mj-text>
+            <mj-button background-color="#95a5a6" color="#ffffff" font-size="12px" 
+                       href="{{article_1_url}}" padding="10px 0" border-radius="3px">
+              Read More
+            </mj-button>
+          </mj-column>
+          <mj-column width="50%">
+            <mj-text font-size="18px" font-weight="bold" color="#2c3e50">
+              {{article_2_title}}
+            </mj-text>
+            <mj-text font-size="14px" color="#555555" line-height="1.6">
+              {{article_2_excerpt}}
+            </mj-text>
+            <mj-button background-color="#95a5a6" color="#ffffff" font-size="12px" 
+                       href="{{article_2_url}}" padding="10px 0" border-radius="3px">
+              Read More
+            </mj-button>
+          </mj-column>
+        </mj-section>
+
+        <!-- Call to Action -->
+        <mj-section background-color="#e74c3c" padding="30px 20px" border-radius="5px">
+          <mj-column>
+            <mj-text align="center" color="#ffffff" font-size="20px" font-weight="bold">
+              {{cta_title}}
+            </mj-text>
+            <mj-text align="center" color="#ffffff" font-size="16px" padding="15px 0">
+              {{cta_description}}
+            </mj-text>
+            <mj-button background-color="#ffffff" color="#e74c3c" font-size="16px" font-weight="bold" 
+                       href="{{cta_url}}" padding="15px 30px" border-radius="5px">
+              {{cta_button_text}}
+            </mj-button>
+          </mj-column>
+        </mj-section>
+      </mj-column>
+    </mj-section>
+
+    <!-- Footer -->
+    <mj-section background-color="#34495e" padding="30px 20px">
+      <mj-column>
+        <mj-text align="center" color="#ecf0f1" font-size="14px">
+          <strong>{{company_name}}</strong><br/>
+          {{company_address}}<br/>
+          {{company_phone}}
+        </mj-text>
+        
+        <mj-text align="center" color="#bdc3c7" font-size="12px" padding="20px 0">
+          You received this email because you subscribed to our newsletter.<br/>
+          <a href="{{unsubscribe_url}}" style="color: #3498db;">Unsubscribe</a> | 
+          <a href="{{preferences_url}}" style="color: #3498db;">Update Preferences</a>
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

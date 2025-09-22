@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Newsletter Platform Installer
-# One-command installer for self-hosted newsletter platform
+# Self-Hosted Newsletter Platform Installer
+# This script sets up the complete newsletter platform with Docker, Caddy, and MTA
 
 set -e
 
@@ -13,270 +13,520 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="/opt/newsletter"
-DOCKER_COMPOSE_VERSION="2.20.0"
-APP_VERSION="v1.0.0"
+APP_NAME="newsletter-platform"
+APP_USER="newsletter"
+APP_DIR="/opt/newsletter"
+DOCKER_COMPOSE_FILE="docker-compose-full.yml"
+ENV_FILE=".env"
 
-# Functions
-log_info() {
+# Function to print colored output
+print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-log_success() {
+print_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-log_warning() {
+print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-log_error() {
+print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to check if running as root
 check_root() {
     if [[ $EUID -eq 0 ]]; then
-        log_error "This script should not be run as root for security reasons."
-        log_info "Please run as a regular user with sudo privileges."
+        print_error "This script should not be run as root for security reasons."
+        print_error "Please run as a regular user with sudo privileges."
         exit 1
     fi
 }
 
-check_dependencies() {
-    log_info "Checking system dependencies..."
-    
-    # Check if running on supported OS
-    if [[ "$OSTYPE" != "linux-gnu"* ]]; then
-        log_error "This installer only supports Linux systems."
+# Function to check if user has sudo privileges
+check_sudo() {
+    if ! sudo -n true 2>/dev/null; then
+        print_error "This script requires sudo privileges."
+        print_error "Please ensure your user has sudo access."
         exit 1
     fi
-    
-    # Check if curl is available
-    if ! command -v curl &> /dev/null; then
-        log_error "curl is required but not installed."
-        exit 1
-    fi
-    
-    # Check if wget is available
-    if ! command -v wget &> /dev/null; then
-        log_error "wget is required but not installed."
-        exit 1
-    fi
-    
-    log_success "System dependencies check passed."
 }
 
+# Function to detect OS
+detect_os() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if [ -f /etc/debian_version ]; then
+            OS="debian"
+        elif [ -f /etc/redhat-release ]; then
+            OS="redhat"
+        else
+            OS="linux"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        OS="macos"
+    else
+        OS="unknown"
+    fi
+    print_status "Detected OS: $OS"
+}
+
+# Function to install Docker
 install_docker() {
-    log_info "Installing Docker..."
-    
     if command -v docker &> /dev/null; then
-        log_info "Docker is already installed."
+        print_success "Docker is already installed"
         return
     fi
     
-    # Install Docker
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    rm get-docker.sh
+    print_status "Installing Docker..."
+    
+    case $OS in
+        "debian")
+            sudo apt-get update
+            sudo apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
+            curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            ;;
+        "redhat")
+            sudo yum install -y yum-utils
+            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            sudo yum install -y docker-ce docker-ce-cli containerd.io
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            ;;
+        "macos")
+            print_warning "Please install Docker Desktop for Mac from https://www.docker.com/products/docker-desktop"
+            print_warning "After installation, run this script again."
+            exit 1
+            ;;
+        *)
+            print_error "Unsupported operating system. Please install Docker manually."
+            exit 1
+            ;;
+    esac
     
     # Add current user to docker group
     sudo usermod -aG docker $USER
-    
-    log_success "Docker installed successfully."
-    log_warning "Please log out and log back in for group changes to take effect."
+    print_success "Docker installed successfully"
+    print_warning "Please log out and log back in for Docker group changes to take effect."
 }
 
+# Function to install Docker Compose
 install_docker_compose() {
-    log_info "Installing Docker Compose..."
-    
     if command -v docker-compose &> /dev/null; then
-        log_info "Docker Compose is already installed."
+        print_success "Docker Compose is already installed"
         return
     fi
     
-    # Download Docker Compose
-    sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    print_status "Installing Docker Compose..."
+    
+    # Get latest version
+    COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
+    
+    sudo curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
     sudo chmod +x /usr/local/bin/docker-compose
     
-    # Create symlink
-    sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-    
-    log_success "Docker Compose installed successfully."
+    print_success "Docker Compose installed successfully"
 }
 
-create_system_user() {
-    log_info "Creating system user for newsletter platform..."
-    
-    if id "newsletter" &>/dev/null; then
-        log_info "User 'newsletter' already exists."
+# Function to create application user
+create_app_user() {
+    if id "$APP_USER" &>/dev/null; then
+        print_success "User $APP_USER already exists"
     else
-        sudo useradd -r -s /bin/false -d $INSTALL_DIR newsletter
-        log_success "User 'newsletter' created."
+        print_status "Creating application user: $APP_USER"
+        sudo useradd -r -s /bin/false -d $APP_DIR $APP_USER
+        print_success "User $APP_USER created"
     fi
 }
 
+# Function to get server IP
 get_server_ip() {
-    # Try to get public IP
-    SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip || curl -s icanhazip.com || echo "YOUR_SERVER_IP")
-    echo $SERVER_IP
+    # Try to get external IP
+    EXTERNAL_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "")
+    
+    if [ -n "$EXTERNAL_IP" ]; then
+        SERVER_IP=$EXTERNAL_IP
+    else
+        # Fallback to local IP
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+    fi
+    
+    print_status "Detected server IP: $SERVER_IP"
 }
 
-prompt_configuration() {
-    log_info "Please provide the following configuration:"
+# Function to prompt for configuration
+prompt_config() {
     echo
+    print_status "Newsletter Platform Configuration"
+    echo "======================================"
     
-    # Admin domain
-    read -p "Admin domain (e.g., panel.example.com): " ADMIN_DOMAIN
-    if [[ -z "$ADMIN_DOMAIN" ]]; then
-        log_error "Admin domain is required."
-        exit 1
-    fi
+    # App domain
+    while true; do
+        read -p "Enter your admin panel domain (e.g., panel.example.com): " APP_DOMAIN
+        if [[ $APP_DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
+            break
+        else
+            print_error "Please enter a valid domain name"
+        fi
+    done
     
     # Sending domain
-    read -p "Sending domain (e.g., news.example.com): " SENDING_DOMAIN
-    if [[ -z "$SENDING_DOMAIN" ]]; then
-        log_error "Sending domain is required."
-        exit 1
-    fi
+    while true; do
+        read -p "Enter your sending domain (e.g., news.example.com): " SENDING_DOMAIN
+        if [[ $SENDING_DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
+            break
+        else
+            print_error "Please enter a valid domain name"
+        fi
+    done
     
     # License key
-    read -p "License key: " LICENSE_KEY
-    if [[ -z "$LICENSE_KEY" ]]; then
-        log_error "License key is required."
-        exit 1
-    fi
+    while true; do
+        read -p "Enter your license key: " LICENSE_KEY
+        if [ -n "$LICENSE_KEY" ]; then
+            break
+        else
+            print_error "License key is required"
+        fi
+    done
     
-    # Server IP
-    SERVER_IP=$(get_server_ip)
-    read -p "Server IP address [$SERVER_IP]: " INPUT_IP
-    if [[ -n "$INPUT_IP" ]]; then
-        SERVER_IP="$INPUT_IP"
-    fi
+    # Email address for admin
+    while true; do
+        read -p "Enter admin email address: " ADMIN_EMAIL
+        if [[ $ADMIN_EMAIL =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            break
+        else
+            print_error "Please enter a valid email address"
+        fi
+    done
     
-    # Email
-    read -p "Admin email address: " ADMIN_EMAIL
-    if [[ -z "$ADMIN_EMAIL" ]]; then
-        log_error "Admin email is required."
-        exit 1
-    fi
+    # Generate random password for admin
+    ADMIN_PASSWORD=$(openssl rand -base64 32)
     
-    log_success "Configuration collected."
+    print_success "Configuration collected"
 }
 
+# Function to generate DKIM keys
 generate_dkim_keys() {
-    log_info "Generating DKIM keys..."
+    print_status "Generating DKIM keys for $SENDING_DOMAIN..."
     
-    # Generate DKIM keys using OpenSSL
-    DKIM_SELECTOR="newsletter"
-    DKIM_PRIVATE_KEY_FILE="$INSTALL_DIR/mta/keys/dkim.key"
-    DKIM_PUBLIC_KEY_FILE="$INSTALL_DIR/mta/keys/dkim.pub"
-    
-    # Create keys directory
-    sudo mkdir -p "$INSTALL_DIR/mta/keys"
+    # Create temporary directory for keys
+    TEMP_DIR=$(mktemp -d)
     
     # Generate private key
-    sudo openssl genrsa -out "$DKIM_PRIVATE_KEY_FILE" 2048
-    sudo chmod 600 "$DKIM_PRIVATE_KEY_FILE"
+    openssl genrsa -out "$TEMP_DIR/dkim_private.pem" 2048
     
     # Generate public key
-    sudo openssl rsa -in "$DKIM_PRIVATE_KEY_FILE" -pubout -out "$DKIM_PUBLIC_KEY_FILE"
-    sudo chmod 644 "$DKIM_PUBLIC_KEY_FILE"
+    openssl rsa -in "$TEMP_DIR/dkim_private.pem" -pubout -out "$TEMP_DIR/dkim_public.pem"
     
-    # Extract public key for DNS record
-    DKIM_PUBLIC_KEY=$(sudo openssl rsa -in "$DKIM_PRIVATE_KEY_FILE" -pubout -outform DER | openssl base64 -A)
+    # Extract public key in DNS format
+    DKIM_PUBLIC_KEY=$(openssl rsa -in "$TEMP_DIR/dkim_private.pem" -pubout -outform DER 2>/dev/null | openssl base64 -A)
+    DKIM_SELECTOR="newsletter"
     
-    log_success "DKIM keys generated."
+    # Store keys
+    DKIM_PRIVATE_KEY=$(cat "$TEMP_DIR/dkim_private.pem")
+    DKIM_PUBLIC_KEY_DNS="v=DKIM1; k=rsa; p=$DKIM_PUBLIC_KEY"
+    
+    # Cleanup
+    rm -rf "$TEMP_DIR"
+    
+    print_success "DKIM keys generated"
 }
 
-generate_tls_cert() {
-    log_info "Generating self-signed TLS certificate..."
+# Function to create environment file
+create_env_file() {
+    print_status "Creating environment configuration..."
     
-    TLS_CERT_FILE="$INSTALL_DIR/mta/keys/tls.crt"
-    TLS_KEY_FILE="$INSTALL_DIR/mta/keys/tls.key"
-    
-    sudo openssl req -x509 -newkey rsa:4096 -keyout "$TLS_KEY_FILE" -out "$TLS_CERT_FILE" -days 365 -nodes \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=$SENDING_DOMAIN"
-    
-    sudo chmod 600 "$TLS_KEY_FILE"
-    sudo chmod 644 "$TLS_CERT_FILE"
-    
-    log_success "TLS certificate generated."
-}
-
-create_directories() {
-    log_info "Creating installation directories..."
-    
-    sudo mkdir -p "$INSTALL_DIR"/{app,deploy,mta/keys,scripts,backups}
-    sudo chown -R newsletter:newsletter "$INSTALL_DIR"
-    
-    log_success "Directories created."
-}
-
-copy_files() {
-    log_info "Copying application files..."
-    
-    # Copy deployment files
-    sudo cp -r deploy/* "$INSTALL_DIR/deploy/"
-    sudo cp -r scripts/* "$INSTALL_DIR/scripts/"
-    
-    # Set permissions
-    sudo chown -R newsletter:newsletter "$INSTALL_DIR"
-    sudo chmod +x "$INSTALL_DIR/scripts"/*.sh
-    
-    log_success "Files copied."
-}
-
-generate_configs() {
-    log_info "Generating configuration files..."
-    
-    # Generate .env file
-    cat > "$INSTALL_DIR/.env" << EOF
+    cat > $ENV_FILE << EOF
 # Newsletter Platform Configuration
-ADMIN_DOMAIN=$ADMIN_DOMAIN
+APP_DOMAIN=$APP_DOMAIN
 SENDING_DOMAIN=$SENDING_DOMAIN
 LICENSE_KEY=$LICENSE_KEY
-SERVER_IP=$SERVER_IP
 ADMIN_EMAIL=$ADMIN_EMAIL
-DKIM_SELECTOR=newsletter
-MADDY_HOSTNAME=$SENDING_DOMAIN
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+SERVER_IP=$SERVER_IP
+
+# Database
+DATABASE_URL=sqlite:///var/app/newsletter.db
+
+# SMTP Configuration (internal to Docker network)
+SMTP_HOST=mta
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+
+# DKIM Configuration
+DKIM_SELECTOR=$DKIM_SELECTOR
+DKIM_PRIVATE_KEY='$DKIM_PRIVATE_KEY'
+DKIM_PUBLIC_KEY='$DKIM_PUBLIC_KEY_DNS'
+
+# App Configuration
+PORT=8080
+LOG_LEVEL=info
 EOF
-    
-    # Generate Caddyfile
-    sed -i "s/\${ADMIN_DOMAIN:panel.example.com}/$ADMIN_DOMAIN/g" "$INSTALL_DIR/deploy/Caddyfile"
-    sed -i "s/\${SENDING_DOMAIN:news.example.com}/$SENDING_DOMAIN/g" "$INSTALL_DIR/deploy/Caddyfile"
-    
-    # Generate Maddy config
-    sed -i "s/\${env.SENDING_DOMAIN}/$SENDING_DOMAIN/g" "$INSTALL_DIR/deploy/mta/maddy.conf"
-    sed -i "s/\${env.MADDY_HOSTNAME}/$SENDING_DOMAIN/g" "$INSTALL_DIR/deploy/mta/maddy.conf"
-    sed -i "s/\${env.DKIM_SELECTOR}/newsletter/g" "$INSTALL_DIR/deploy/mta/maddy.conf"
-    
-    log_success "Configuration files generated."
+
+    print_success "Environment file created: $ENV_FILE"
 }
 
-build_and_deploy() {
-    log_info "Building and deploying application..."
+# Function to create Docker Compose file
+create_docker_compose() {
+    print_status "Creating Docker Compose configuration..."
     
-    cd "$INSTALL_DIR"
-    
-    # Build the application
-    log_info "Building Go application..."
-    docker build -t newsletter:latest ../app/
-    
-    # Start services
-    log_info "Starting services..."
-    docker-compose -f deploy/docker-compose.yml up -d
-    
-    log_success "Application deployed successfully."
+    cat > $DOCKER_COMPOSE_FILE << EOF
+version: '3.8'
+
+services:
+  # Reverse Proxy with TLS
+  proxy:
+    image: caddy:2-alpine
+    container_name: newsletter-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - APP_DOMAIN=$APP_DOMAIN
+      - SENDING_DOMAIN=$SENDING_DOMAIN
+    restart: unless-stopped
+    depends_on:
+      - app
+
+  # Newsletter Application
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: newsletter-app
+    environment:
+      - DATABASE_URL=sqlite:///var/app/newsletter.db
+      - PORT=8080
+      - LICENSE_KEY=$LICENSE_KEY
+      - SMTP_HOST=mta
+      - SMTP_PORT=587
+      - DKIM_SELECTOR=$DKIM_SELECTOR
+      - DKIM_PRIVATE_KEY='$DKIM_PRIVATE_KEY'
+    volumes:
+      - app-data:/var/app
+    restart: unless-stopped
+    depends_on:
+      - mta
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Mail Transfer Agent (MTA)
+  mta:
+    image: foxcpp/maddy:latest
+    container_name: newsletter-mta
+    volumes:
+      - ./deploy/mta:/data
+      - ./deploy/maddy.conf:/etc/maddy/maddy.conf
+    environment:
+      - SENDING_DOMAIN=$SENDING_DOMAIN
+      - DKIM_SELECTOR=$DKIM_SELECTOR
+      - DKIM_PRIVATE_KEY='$DKIM_PRIVATE_KEY'
+    restart: unless-stopped
+    ports:
+      - "25:25"   # SMTP
+      - "587:587" # Submission
+    healthcheck:
+      test: ["CMD", "maddy", "ctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  app-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
+
+networks:
+  default:
+    name: newsletter-network
+EOF
+
+    print_success "Docker Compose file created: $DOCKER_COMPOSE_FILE"
 }
 
-generate_dns_records() {
-    log_info "Generating DNS records..."
+# Function to create Caddyfile
+create_caddyfile() {
+    print_status "Creating Caddyfile..."
     
-    # Get DKIM public key
-    DKIM_PUBLIC_KEY=$(sudo openssl rsa -in "$INSTALL_DIR/mta/keys/dkim.key" -pubout -outform DER | openssl base64 -A)
+    mkdir -p deploy
     
-    # Generate DNS records file
-    cat > "$INSTALL_DIR/dns-records.txt" << EOF
+    cat > deploy/Caddyfile << EOF
+# Newsletter Platform Caddyfile
+{$APP_DOMAIN} {
+    # Admin Panel
+    reverse_proxy app:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        
+        # Prevent MIME type sniffing
+        X-Content-Type-Options "nosniff"
+        
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+        
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+    
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format single_field common_log
+    }
+}
+
+# Health check endpoint
+{$APP_DOMAIN}/health {
+    respond "OK" 200
+}
+EOF
+
+    print_success "Caddyfile created"
+}
+
+# Function to create MTA configuration
+create_mta_config() {
+    print_status "Creating MTA configuration..."
+    
+    cat > deploy/maddy.conf << EOF
+# Maddy MTA Configuration for Newsletter Platform
+
+# Global configuration
+{
+    hostname = "mail.{$SENDING_DOMAIN}"
+    primary_domain = "{$SENDING_DOMAIN}"
+    
+    # TLS configuration
+    tls = "tls://0.0.0.0:465"
+    tls = "tls://0.0.0.0:587"
+    
+    # Submission port
+    submission = "tls://0.0.0.0:587"
+    
+    # Authentication
+    auth {
+        plain /etc/maddy/credentials
+    }
+    
+    # Storage
+    storage = "sqlite3:///data/maddy.db"
+    
+    # Queue
+    queue = "memory"
+    
+    # Logging
+    log {
+        level = "info"
+        output = "stdout"
+    }
+}
+
+# SMTP server
+(smtp) tcp://0.0.0.0:25 {
+    limits {
+        all rate 10 1s
+        all concurrency 5
+    }
+    
+    # DKIM signing
+    dkim {
+        domain {$SENDING_DOMAIN}
+        selector {$DKIM_SELECTOR}
+        key file /etc/maddy/dkim.key
+    }
+    
+    # Bounce handling
+    default_destination {
+        deliver_to &local_routing
+    }
+}
+
+# Local delivery
+(local_routing) {
+    deliver_to &remote_queue
+}
+
+# Remote delivery queue
+(remote_queue) {
+    destination {
+        deliver_to &remote_smtp
+    }
+}
+
+# Remote SMTP delivery
+(remote_smtp) {
+    limits {
+        destination rate 5 1s
+        destination concurrency 2
+    }
+    
+    mx_auth {
+        dane
+        mta_sts
+    }
+}
+
+# Bounce processing
+(bounce_processor) {
+    # Process bounces and send to webhook
+    deliver_to &bounce_webhook
+}
+
+# Bounce webhook
+(bounce_webhook) {
+    # Send bounces to application webhook
+    webhook {
+        url "http://app:8080/api/hooks/bounce"
+        method "POST"
+    }
+}
+EOF
+
+    # Create credentials file
+    cat > deploy/credentials << EOF
+# MTA credentials for internal use
+newsletter:$(openssl rand -base64 32)
+EOF
+
+    # Create DKIM key file
+    echo "$DKIM_PRIVATE_KEY" > deploy/dkim.key
+    
+    print_success "MTA configuration created"
+}
+
+# Function to create DNS records file
+create_dns_records() {
+    print_status "Creating DNS records file..."
+    
+    cat > dns-records.txt << EOF
 # DNS Records for Newsletter Platform
 # Add these records to your DNS provider
 
@@ -287,85 +537,137 @@ Value: v=spf1 a mx ip4:$SERVER_IP ~all
 
 # DKIM Record
 Type: TXT
-Name: newsletter._domainkey.$SENDING_DOMAIN
-Value: v=DKIM1; k=rsa; p=$DKIM_PUBLIC_KEY
+Name: $DKIM_SELECTOR._domainkey.$SENDING_DOMAIN
+Value: $DKIM_PUBLIC_KEY_DNS
 
 # DMARC Record
 Type: TXT
 Name: _dmarc.$SENDING_DOMAIN
-Value: v=DMARC1; p=quarantine; rua=mailto:dmarc@$SENDING_DOMAIN
+Value: v=DMARC1; p=quarantine; rua=mailto:dmarc@$SENDING_DOMAIN; ruf=mailto:dmarc@$SENDING_DOMAIN
 
-# PTR Record (set by your hosting provider)
-# Reverse DNS should point to: mail.$SENDING_DOMAIN
+# PTR Record (Reverse DNS)
+# Set up reverse DNS for your server IP ($SERVER_IP) to point to: mail.$SENDING_DOMAIN
+# This must be configured with your hosting provider
 
-# Admin Domain (CNAME or A record)
+# Admin Panel (Optional - for subdomain)
 Type: A
-Name: $ADMIN_DOMAIN
+Name: $APP_DOMAIN
+Value: $SERVER_IP
+
+# Sending Domain (Optional - for subdomain)
+Type: A
+Name: $SENDING_DOMAIN
 Value: $SERVER_IP
 EOF
     
-    log_success "DNS records generated in $INSTALL_DIR/dns-records.txt"
+    print_success "DNS records file created: dns-records.txt"
 }
 
-wait_for_services() {
-    log_info "Waiting for services to start..."
+# Function to start services
+start_services() {
+    print_status "Starting newsletter platform services..."
     
-    # Wait for app to be ready
-    for i in {1..30}; do
-        if curl -s http://localhost:8080/api/health > /dev/null 2>&1; then
-            log_success "Application is ready!"
+    # Build and start services
+    docker-compose -f $DOCKER_COMPOSE_FILE up -d --build
+    
+    print_success "Services started successfully"
+}
+
+# Function to wait for services
+wait_for_services() {
+    print_status "Waiting for services to be ready..."
+    
+    # Wait for app to be healthy
+    local max_attempts=30
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if docker-compose -f $DOCKER_COMPOSE_FILE ps app | grep -q "healthy"; then
+            print_success "Application is ready"
             break
         fi
-        log_info "Waiting for application... ($i/30)"
+        
+        attempt=$((attempt + 1))
+        print_status "Waiting for application... (attempt $attempt/$max_attempts)"
         sleep 10
     done
     
-    if ! curl -s http://localhost:8080/api/health > /dev/null 2>&1; then
-        log_error "Application failed to start. Check logs with: docker-compose logs"
+    if [ $attempt -eq $max_attempts ]; then
+        print_error "Application failed to start properly"
+        print_error "Check logs with: docker-compose -f $DOCKER_COMPOSE_FILE logs"
         exit 1
     fi
 }
 
-print_success_message() {
+# Function to display final instructions
+display_final_instructions() {
     echo
-    log_success "Newsletter Platform installed successfully!"
+    print_success "Newsletter Platform Installation Complete!"
+    echo "=============================================="
     echo
-    echo "Next steps:"
-    echo "1. Add the DNS records from $INSTALL_DIR/dns-records.txt to your DNS provider"
+    print_status "Next Steps:"
+    echo "1. Add the DNS records from 'dns-records.txt' to your DNS provider"
     echo "2. Wait for DNS propagation (usually 5-15 minutes)"
-    echo "3. Access the admin panel at: https://$ADMIN_DOMAIN"
-    echo "4. Complete the domain verification process"
+    echo "3. Access your admin panel at: https://$APP_DOMAIN"
+    echo "4. Login with:"
+    echo "   Email: $ADMIN_EMAIL"
+    echo "   Password: $ADMIN_PASSWORD"
     echo
-    echo "Useful commands:"
-    echo "  View logs: docker-compose -f $INSTALL_DIR/deploy/docker-compose.yml logs"
-    echo "  Restart: docker-compose -f $INSTALL_DIR/deploy/docker-compose.yml restart"
-    echo "  Stop: docker-compose -f $INSTALL_DIR/deploy/docker-compose.yml down"
+    print_status "Important Files:"
+    echo "- DNS Records: dns-records.txt"
+    echo "- Environment: $ENV_FILE"
+    echo "- Docker Compose: $DOCKER_COMPOSE_FILE"
     echo
-    echo "Backup script: $INSTALL_DIR/scripts/backup.sh"
+    print_status "Useful Commands:"
+    echo "- View logs: docker-compose -f $DOCKER_COMPOSE_FILE logs"
+    echo "- Restart services: docker-compose -f $DOCKER_COMPOSE_FILE restart"
+    echo "- Stop services: docker-compose -f $DOCKER_COMPOSE_FILE down"
+    echo "- Update platform: docker-compose -f $DOCKER_COMPOSE_FILE pull && docker-compose -f $DOCKER_COMPOSE_FILE up -d"
+    echo
+    print_warning "Keep your admin password safe! You can change it in the admin panel."
     echo
 }
 
-# Main installation process
+# Main installation function
 main() {
-    echo "Newsletter Platform Installer"
-    echo "============================="
+    echo "Self-Hosted Newsletter Platform Installer"
+    echo "========================================="
     echo
     
+    # Pre-flight checks
     check_root
-    check_dependencies
+    check_sudo
+    detect_os
+    
+    # Install dependencies
     install_docker
     install_docker_compose
-    create_system_user
-    prompt_configuration
-    create_directories
-    copy_files
+    
+    # Create application user
+    create_app_user
+    
+    # Get server information
+    get_server_ip
+    
+    # Get configuration from user
+    prompt_config
+    
+    # Generate DKIM keys
     generate_dkim_keys
-    generate_tls_cert
-    generate_configs
-    build_and_deploy
-    generate_dns_records
+    
+    # Create configuration files
+    create_env_file
+    create_docker_compose
+    create_caddyfile
+    create_mta_config
+    create_dns_records
+    
+    # Start services
+    start_services
     wait_for_services
-    print_success_message
+    
+    # Display final instructions
+    display_final_instructions
 }
 
 # Run main function
