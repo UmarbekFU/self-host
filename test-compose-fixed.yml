@@ -1,0 +1,41 @@
+# Fixed Docker Compose for comprehensive testing
+services:
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.debian
+      platforms:
+        - linux/arm64
+    container_name: newsletter-app
+    ports:
+      - "8081:8080"
+    environment:
+      - DATABASE_URL=sqlite:///var/app/newsletter.db
+      - PORT=8080
+      - LICENSE_KEY=test-license-key-12345
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+    depends_on:
+      - mailhog
+    volumes:
+      - app-data:/var/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Simple SMTP server for testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: newsletter-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local

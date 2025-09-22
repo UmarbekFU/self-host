@@ -1,14 +1,10 @@
-# Build stage
-FROM golang:1.23-bookworm AS builder
+# Multi-stage Dockerfile optimized for ARM64
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache gcc musl-dev sqlite-dev
 
 WORKDIR /app
-
-# Install build dependencies and security updates
-RUN apt-get update && \
-    apt-get install -y git gcc libc6-dev && \
-    apt-get upgrade -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
 
 # Copy go mod files
 COPY go.mod ./
@@ -20,17 +16,14 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Tidy modules and build the application
-RUN go mod tidy && CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o newsletter ./cmd/server
+# Build the application with proper CGO support
+RUN go mod tidy && CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o newsletter ./cmd/server
 
 # Final stage
 FROM alpine:3.20
 
-# Install runtime dependencies and security updates
-RUN apk update && \
-    apk --no-cache add ca-certificates sqlite wget && \
-    apk upgrade --no-cache && \
-    rm -rf /var/cache/apk/*
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates sqlite
 
 # Create app user
 RUN addgroup -g 1001 -S appgroup && \
@@ -42,7 +35,7 @@ RUN mkdir -p /var/app && chown -R appuser:appgroup /var/app
 # Copy binary from builder stage
 COPY --from=builder /app/newsletter /usr/local/bin/newsletter
 
-# Copy static files (SvelteKit build output)
+# Copy static files
 COPY --from=builder /app/static /var/app/static
 
 # Copy migrations
