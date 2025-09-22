@@ -1,3 +1,6 @@
+-- SQLite Migration: 001_initial_schema.sql
+-- This file contains SQLite-specific syntax including IF NOT EXISTS clauses
+
 -- subscribers
 CREATE TABLE IF NOT EXISTS subscribers (
   id INTEGER PRIMARY KEY,
