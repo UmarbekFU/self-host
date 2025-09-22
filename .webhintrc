@@ -1,0 +1,13 @@
+{
+  "extends": ["web-recommended"],
+  "hints": {
+    "typescript-config/strict": "off",
+    "typescript-config/consistent-casing": "off"
+  },
+  "ignoredUrls": [
+    {
+      "pattern": "**/.svelte-kit/**",
+      "reason": "Generated SvelteKit files should not be linted"
+    }
+  ]
+}
