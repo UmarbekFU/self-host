@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    container_name: newsletter-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ../app
+      dockerfile: Dockerfile
+    container_name: newsletter-app
+    environment:
+      - DATABASE_URL=sqlite:///var/app/newsletter.db
+      - PORT=8080
+      - LICENSE_KEY=${LICENSE_KEY}
+      - SMTP_HOST=mta
+      - SMTP_PORT=587
+    volumes:
+      - app-data:/var/app
+      - ./mta:/etc/maddy
+    depends_on:
+      - mta
+    restart: unless-stopped
+
+  mta:
+    image: foxcpp/maddy:latest
+    container_name: newsletter-mta
+    volumes:
+      - ./mta:/data
+      - ./mta/keys:/etc/maddy/keys
+    ports:
+      - "25:25"
+      - "587:587"
+    environment:
+      - MADDY_HOSTNAME=${SENDING_DOMAIN}
+    restart: unless-stopped
+
+  # Development only - remove in production
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: newsletter-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    profiles:
+      - dev
+
+volumes:
+  app-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local

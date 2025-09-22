@@ -1,0 +1,57 @@
+# Newsletter Platform Caddyfile
+# Replace with your actual domains
+
+# Admin panel
+{$ADMIN_DOMAIN:panel.example.com} {
+    reverse_proxy app:8080
+    
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+    
+    # CORS for API
+    @api {
+        path /api/*
+    }
+    header @api Access-Control-Allow-Origin "*"
+    header @api Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    header @api Access-Control-Allow-Headers "Content-Type, Authorization"
+    
+    # Handle preflight requests
+    @options {
+        method OPTIONS
+    }
+    respond @options 200
+}
+
+# Sending domain (for tracking links)
+{$SENDING_DOMAIN:news.example.com} {
+    reverse_proxy app:8080
+    
+    # Handle tracking routes
+    handle /r/* {
+        reverse_proxy app:8080
+    }
+    
+    handle /u/* {
+        reverse_proxy app:8080
+    }
+    
+    # Handle tracking pixels
+    handle /api/track/* {
+        reverse_proxy app:8080
+    }
+}
+
+# Redirect HTTP to HTTPS
+http://{$ADMIN_DOMAIN:panel.example.com} {
+    redir https://{$ADMIN_DOMAIN:panel.example.com}{uri} permanent
+}
+
+http://{$SENDING_DOMAIN:news.example.com} {
+    redir https://{$SENDING_DOMAIN:news.example.com}{uri} permanent
+}
